@@ -8,13 +8,12 @@
  * creates the contact in Scoop's GHL CRM with the trigger_lead tag + a context note
  * (mirrors the join.strongpilates.ca funnel pattern in strong-funnel-platform/src/lib/ghl.ts).
  *
- * Secrets (META_CAPI_TOKEN, GHL_PIT) come from env only — never client-side, never
- * in git. Set them as Coolify env vars in production.
+ * It also enrols the lead into the GymMaster Free Trial pass via /portal/api/v1/signup,
+ * selecting the membership with `membershiptypeid` (the documented field; `membership_id`
+ * is silently ignored and drops the lead into the gym's default paid plan).
  *
- * Parked for a later pass: enrolling the lead into the GymMaster Free Trial pass
- * (must use programme_ref caef21f8..., not the numeric membership id). That is a
- * live write to their member system and needs its own validated pass + GymMaster
- * creds added to this app's env.
+ * Secrets (META_CAPI_TOKEN, GHL_PIT, GM_API_KEY) come from env only — never client-side,
+ * never in git. Set them as Coolify env vars in production.
  */
 
 import express from 'express'
@@ -36,6 +35,15 @@ const GHL_SOURCE = 'Scoop Free Session Funnel'
 const GHL_TAGS = ['trigger_lead', 'funnel-lead', 'location-scoop-pilates']
 const STUDIO_TZ = 'Australia/Melbourne' // Carnegie, VIC
 const FUNNEL_HOST = 'trial.scooppilates.com.au'
+
+// GymMaster (Scoop member system) — enrol the lead into the Free Trial pass.
+// The membership is selected by `membershiptypeid` (the documented field), NOT `membership_id`
+// (which GymMaster silently ignores, dropping the lead into the default paid plan).
+const GM_API_KEY = process.env.GM_API_KEY
+const GM_BASE_URL = process.env.GM_BASE_URL || 'https://scooppilates.gymmasteronline.com'
+const GM_MEMBERSHIPTYPEID = Number(process.env.GM_MEMBERSHIPTYPEID || 190009) // Free Trial ($0, 1-visit/3-week)
+const GM_COMPANY_ID = Number(process.env.GM_COMPANY_ID || 2)
+const GM_DEFAULT_DOB = process.env.GM_DEFAULT_DOB || '2000-01-01' // form does not collect dob; API requires it
 
 const app = express()
 app.set('trust proxy', true) // behind Coolify's reverse proxy — get the real client IP
@@ -176,16 +184,60 @@ async function syncToGhl({ firstName, email, phone, fbp, fbc, eventSourceUrl }) 
   }
 }
 
+// ---- GymMaster: enrol the lead into the Free Trial pass ----
+async function enrolInGymMaster({ firstName, email, phone }) {
+  if (!GM_API_KEY) {
+    console.warn('[GM] GM_API_KEY not set — enrolment skipped')
+    return { gm: 'skipped' }
+  }
+  const parts = String(firstName || '').trim().split(/\s+/).filter(Boolean)
+  const firstname = parts[0] || 'Member'
+  const surname = parts.slice(1).join(' ') || 'Lead' // form collects first name only; studio updates on first visit
+  const password = 'Scoop-' + Math.random().toString(36).slice(2, 10) + 'A1' // generated; lead can reset for app access
+  const payload = {
+    api_key: GM_API_KEY,
+    firstname,
+    surname,
+    dob: GM_DEFAULT_DOB,
+    email,
+    password,
+    confirmpassword: password,
+    phonecell: phone || '',
+    membershiptypeid: GM_MEMBERSHIPTYPEID, // 190009 = Free Trial (NOT membership_id)
+    companyid: GM_COMPANY_ID,
+  }
+  try {
+    const r = await fetch(`${GM_BASE_URL}/portal/api/v1/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    const d = await r.json()
+    if (d.error || d.result !== 'success') {
+      // Duplicate email (already a member) is an expected, non-fatal case — the lead is still in the CRM.
+      console.error('[GM] enrolment not successful:', JSON.stringify(d.error || d.result))
+      return { gm: 'error', detail: String(d.error || '').slice(0, 200) }
+    }
+    console.log('[GM] enrolled into Free Trial memberid=%s', d.memberid)
+    return { gm: 'enrolled', memberid: d.memberid }
+  } catch (err) {
+    console.error('[GM] exception', err.message)
+    return { gm: 'exception' }
+  }
+}
+
 app.post('/api/lead', async (req, res) => {
   const { firstName, email, phone, eventId, fbp, fbc, eventSourceUrl } = req.body || {}
   if (!email && !phone) return res.status(400).json({ ok: false, error: 'email or phone required' })
 
-  // Fire Meta CAPI and the GHL CRM sync independently — one failing must not block the other.
-  const [capi, ghl] = await Promise.all([
+  // Capture the lead in the CRM FIRST so it is never lost, then enrol in GymMaster and fire
+  // Meta CAPI in parallel. Each step is independent — one failing cannot block the others.
+  const ghl = await syncToGhl({ firstName, email, phone, fbp, fbc, eventSourceUrl })
+  const [capi, gm] = await Promise.all([
     sendCapi({ firstName, email, phone, eventId, fbp, fbc, eventSourceUrl, ip: req.ip, ua: req.get('user-agent') }),
-    syncToGhl({ firstName, email, phone, fbp, fbc, eventSourceUrl }),
+    enrolInGymMaster({ firstName, email, phone }),
   ])
-  return res.json({ ok: true, ...capi, ...ghl })
+  return res.json({ ok: true, ...capi, ...ghl, ...gm })
 })
 
 app.listen(PORT, '0.0.0.0', () => console.log(`scoop funnel listening on :${PORT}`))
