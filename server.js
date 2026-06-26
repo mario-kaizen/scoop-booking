@@ -192,7 +192,7 @@ async function enrolInGymMaster({ firstName, email, phone }) {
   }
   const parts = String(firstName || '').trim().split(/\s+/).filter(Boolean)
   const firstname = parts[0] || 'Member'
-  const surname = parts.slice(1).join(' ') || 'Lead' // form collects first name only; studio updates on first visit
+  const surname = parts.slice(1).join(' ') || 'Scoop' // form asks for full name; fallback if only one word given
   const password = 'Scoop-' + Math.random().toString(36).slice(2, 10) + 'A1' // generated; lead can reset for app access
   const payload = {
     api_key: GM_API_KEY,
