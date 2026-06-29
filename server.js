@@ -20,6 +20,10 @@ import express from 'express'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { createHash } from 'crypto'
+import { db } from './db.js'
+
+const insVisit = db.prepare(`INSERT INTO visits (visitor_id,page,url,referrer,utm_source,utm_medium,utm_campaign,utm_content,utm_term,fbc,fbp,ip,user_agent)
+  VALUES (@visitor_id,@page,@url,@referrer,@utm_source,@utm_medium,@utm_campaign,@utm_content,@utm_term,@fbc,@fbp,@ip,@user_agent)`)
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -48,6 +52,20 @@ const GM_DEFAULT_DOB = process.env.GM_DEFAULT_DOB || '2000-01-01' // form does n
 const app = express()
 app.set('trust proxy', true) // behind Coolify's reverse proxy — get the real client IP
 app.use(express.json())
+
+app.post('/api/track', (req, res) => {
+  try {
+    const b = req.body || {};
+    insVisit.run({
+      visitor_id: b.visitorId || null, page: b.page || null, url: b.url || null, referrer: b.referrer || null,
+      utm_source: b.utmSource || null, utm_medium: b.utmMedium || null, utm_campaign: b.utmCampaign || null,
+      utm_content: b.utmContent || null, utm_term: b.utmTerm || null,
+      fbc: b.fbc || null, fbp: b.fbp || null, ip: req.ip || null, user_agent: req.get('user-agent') || null,
+    });
+  } catch (e) { /* analytics never blocks */ }
+  res.json({ ok: true });
+});
+
 app.use(express.static(path.join(__dirname, 'public')))
 
 app.get('/thank-you', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'thank-you.html')))
