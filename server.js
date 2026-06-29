@@ -21,6 +21,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { createHash } from 'crypto'
 import { db } from './db.js'
+import { buildStats } from './build-stats.js'
 
 const insVisit = db.prepare(`INSERT INTO visits (visitor_id,page,url,referrer,utm_source,utm_medium,utm_campaign,utm_content,utm_term,fbc,fbp,ip,user_agent)
   VALUES (@visitor_id,@page,@url,@referrer,@utm_source,@utm_medium,@utm_campaign,@utm_content,@utm_term,@fbc,@fbp,@ip,@user_agent)`)
@@ -74,6 +75,20 @@ app.use(express.static(path.join(__dirname, 'public')))
 
 app.get('/thank-you', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'thank-you.html')))
 app.get('/healthz', (_req, res) => res.json({ ok: true }))
+
+const FUNNEL_META = {
+  slug: 'scoop-pilates',
+  name: 'Scoop Pilates',
+  host: 'trial.scooppilates.com.au',
+  pixelId: process.env.META_PIXEL_ID,
+  ghlLocationId: GHL_LOCATION_ID,
+};
+
+app.get('/api/stats', (req, res) => {
+  if (!process.env.STATS_SECRET || req.query.secret !== process.env.STATS_SECRET) return res.status(401).json({ ok: false });
+  try { res.json(buildStats(db, FUNNEL_META)); }
+  catch (e) { console.error('stats error', e.message); res.status(500).json({ ok: false }); }
+});
 
 const sha256 = (v) => (v ? createHash('sha256').update(String(v).toLowerCase().trim()).digest('hex') : undefined)
 const digits = (v) => (v ? String(v).replace(/\D/g, '') : '')
