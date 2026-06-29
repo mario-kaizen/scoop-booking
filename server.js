@@ -25,6 +25,10 @@ import { db } from './db.js'
 const insVisit = db.prepare(`INSERT INTO visits (visitor_id,page,url,referrer,utm_source,utm_medium,utm_campaign,utm_content,utm_term,fbc,fbp,ip,user_agent)
   VALUES (@visitor_id,@page,@url,@referrer,@utm_source,@utm_medium,@utm_campaign,@utm_content,@utm_term,@fbc,@fbp,@ip,@user_agent)`)
 
+const insLead = db.prepare(`INSERT INTO leads (first_name,email,phone,event_id,fbc,fbp,ip,user_agent,ghl_status)
+  VALUES (@first_name,@email,@phone,@event_id,@fbc,@fbp,@ip,@user_agent,'pending')`)
+const updLead = db.prepare(`UPDATE leads SET ghl_contact_id=@cid, ghl_status=@ghl, capi_status=@capi, capi_received=@recv, gm_status=@gm WHERE id=@id`)
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const PORT = process.env.PORT || 3000
@@ -248,13 +252,38 @@ app.post('/api/lead', async (req, res) => {
   const { firstName, email, phone, eventId, fbp, fbc, eventSourceUrl } = req.body || {}
   if (!email && !phone) return res.status(400).json({ ok: false, error: 'email or phone required' })
 
+  // Insert a pending row immediately so the lead is never lost even if downstream calls fail
+  let leadRowId = null;
+  try {
+    leadRowId = insLead.run({
+      first_name: firstName || null, email: email || null, phone: phone || null,
+      event_id: eventId || null, fbc: fbc || null, fbp: fbp || null,
+      ip: req.ip || null, user_agent: req.get('user-agent') || null,
+    }).lastInsertRowid;
+  } catch (e) { /* keep going */ }
+
   // Capture the lead in the CRM FIRST so it is never lost, then enrol in GymMaster and fire
-  // Meta CAPI in parallel. Each step is independent — one failing cannot block the others.
+  // Meta CAPI in parallel. Each step is independent - one failing cannot block the others.
   const ghl = await syncToGhl({ firstName, email, phone, fbp, fbc, eventSourceUrl })
   const [capi, gm] = await Promise.all([
     sendCapi({ firstName, email, phone, eventId, fbp, fbc, eventSourceUrl, ip: req.ip, ua: req.get('user-agent') }),
     enrolInGymMaster({ firstName, email, phone }),
   ])
+
+  // Update the row with the outcomes from all three downstream calls
+  if (leadRowId) {
+    try {
+      updLead.run({
+        id: leadRowId,
+        cid: ghl.contactId || null,
+        ghl: ghl.ghl || 'error',
+        capi: capi.capi || 'skipped',
+        recv: capi.events_received || 0,
+        gm: gm.gm || 'skipped',
+      });
+    } catch (e) {}
+  }
+
   return res.json({ ok: true, ...capi, ...ghl, ...gm })
 })
 
