@@ -8,7 +8,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 COPY --from=deps /app/node_modules ./node_modules
-COPY server.js ./
+COPY server.js db.js build-stats.js ./
 COPY public ./public
 
 EXPOSE 3000
