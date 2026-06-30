@@ -250,7 +250,7 @@ img{max-width:100%;display:block}
       <div class="card" id="card">
         <h3>Book your free session</h3>
         <p class="sub">Takes about 30 seconds.</p>
-        <form id="form" novalidate>
+        <form id="form">
           <div class="field"><label for="fn">Full name</label><input id="fn" name="fn" type="text" autocomplete="name" required></div>
           <div class="field"><label for="em">Email</label><input id="em" name="em" type="email" autocomplete="email" required></div>
           <div class="field"><label for="ph">Mobile</label><input id="ph" name="ph" type="tel" autocomplete="tel" placeholder="04xx xxx xxx" required></div>
@@ -368,6 +368,8 @@ img{max-width:100%;display:block}
 document.getElementById('form').addEventListener('submit', async function (e) {
   e.preventDefault();
   var f = e.target;
+  // Hard gate: do not fire pixel/lead or redirect unless all required fields are valid.
+  if (!f.checkValidity()) { f.reportValidity(); return; }
   var data = {
     firstName: (f.fn ? f.fn.value : '').trim(),
     email:     (f.em ? f.em.value : '').trim(),
